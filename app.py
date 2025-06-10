@@ -1,10 +1,21 @@
 from fastapi import FastAPI, UploadFile, File
-from inference import analyze_focus  # استدعاء الدالة من inference.py
+from inference import analyze_focus
+from fastapi.middleware.cors import CORSMiddleware
 import shutil
 import os
 import tempfile
 
 app = FastAPI()
+
+# تمكين إعدادات CORS
+origins = ["*"]  # السماح لجميع النطاقات. يمكنك تحديد نطاقات معينة إذا أردت.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,  # السماح للنطاقات المحددة فقط
+    allow_credentials=True,
+    allow_methods=["*"],  # السماح بجميع الطرق (GET, POST, ...)
+    allow_headers=["*"],  # السماح بجميع الرؤوس
+)
 
 @app.post("/analyze")
 async def analyze_video(file: UploadFile = File(...)):
@@ -23,3 +34,4 @@ async def analyze_video(file: UploadFile = File(...)):
         os.remove(temp_file_path)
 
     return {"focus_score": score}
+
