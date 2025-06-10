@@ -3,12 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 import cv2
 import numpy as np
 import mediapipe as mp
-import time
+import tempfile
+import os
 
 app = FastAPI()
 
 # تمكين إعدادات CORS
-origins = ["*"]  # السماح لجميع النطاقات. يمكنك تحديد نطاقات معينة إذا أردت.
+origins = ["*"]  # السماح لجميع النطاقات
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -32,55 +33,43 @@ def eye_aspect_ratio(eye_landmarks):
     ear = (A + B) / (2.0 * C)
     return ear
 
-# Define function to calculate focus score
-def calculate_focus_score(focus_status, avg_ear, gaze):
-    if focus_status == "Focused":
-        if avg_ear <= EAR_THRESHOLD:
-            return 50  # 👁️ Focused but eyes closed — maybe blinking or tired
-        elif gaze == "Center":
-            return 100  # Full focus
-        elif gaze != "Center":
-            return 70   # Partial focus with gaze off-center
-
-    elif focus_status == "Not Focused":
-        if avg_ear <= EAR_THRESHOLD:  # Eyes closed
-            return 30  # Low focus with eyes closed
-        elif gaze == "Center":
-            return 30  # Lower focus with eyes open and centered gaze
-        else:
-            return 30  # Lower focus with eyes open but not centered gaze
-
-    return 0  # Default to 0 if no conditions match
-
 @app.post("/analyze_focus/")
 async def analyze_focus(video: UploadFile = File(...)):
-    cap = cv2.VideoCapture(video.file.name)
+    # حفظ الفيديو في ملف مؤقت
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_file:
+        temp_file.write(await video.read())
+        temp_file_path = temp_file.name
+
+    cap = cv2.VideoCapture(temp_file_path)
     focus_scores = []
-    start_time = time.time()
 
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
+    try:
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-        ih, iw, _ = frame.shape
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        detection_results = face_detection.process(frame_rgb)
-        mesh_results = face_mesh.process(frame_rgb)
+            ih, iw, _ = frame.shape
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            detection_results = face_detection.process(frame_rgb)
+            mesh_results = face_mesh.process(frame_rgb)
 
-        if detection_results.detections and mesh_results.multi_face_landmarks:
-            for detection, face_landmarks in zip(detection_results.detections, mesh_results.multi_face_landmarks):
-                left_eye = np.array([[face_landmarks.landmark[i].x * iw, face_landmarks.landmark[i].y * ih] for i in [33, 160, 158, 133, 153, 144]])
-                right_eye = np.array([[face_landmarks.landmark[i].x * iw, face_landmarks.landmark[i].y * ih] for i in [362, 385, 387, 263, 373, 380]])
-                avg_ear = (eye_aspect_ratio(left_eye) + eye_aspect_ratio(right_eye)) / 2
+            if detection_results.detections and mesh_results.multi_face_landmarks:
+                for detection, face_landmarks in zip(detection_results.detections, mesh_results.multi_face_landmarks):
+                    left_eye = np.array([[face_landmarks.landmark[i].x * iw, face_landmarks.landmark[i].y * ih] for i in [33, 160, 158, 133, 153, 144]])
+                    right_eye = np.array([[face_landmarks.landmark[i].x * iw, face_landmarks.landmark[i].y * ih] for i in [362, 385, 387, 263, 373, 380]])
+                    avg_ear = (eye_aspect_ratio(left_eye) + eye_aspect_ratio(right_eye)) / 2
 
-                if avg_ear > EAR_THRESHOLD:
-                    focus_scores.append(100)
-                else:
-                    focus_scores.append(30)
-
-    cap.release()
-    cv2.destroyAllWindows()
+                    if avg_ear > EAR_THRESHOLD:
+                        focus_scores.append(100)
+                    else:
+                        focus_scores.append(30)
+    except Exception as e:
+        return {"error": f"Error processing video: {str(e)}"}
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+        os.remove(temp_file_path)  # حذف الملف المؤقت
 
     if not focus_scores:
         return {"focus_score": 0}
